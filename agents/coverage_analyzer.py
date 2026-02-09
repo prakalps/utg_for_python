@@ -30,10 +30,6 @@ class CoverageAnalyzerAgent:
     def analyze_coverage(self, change_result: ChangeDetectionResult) -> CoverageAnalysisResult:
         logging.info("Running coverage analysis")
         coverage_json = Path("coverage.json")
-        if not self._has_tests():
-            logging.warning("No tests collected; skipping coverage run.")
-            return CoverageAnalysisResult(gaps=[], coverage_report={})
-
         self._run_pytest_with_coverage()
 
         if not coverage_json.exists():
@@ -56,16 +52,6 @@ class CoverageAnalyzerAgent:
                 logging.info("Coverage gaps in %s: %s", change.file_path, missing_defs)
                 gaps.append(CoverageGap(file=change.file_path, missing_tests=missing_defs))
         return CoverageAnalysisResult(gaps=gaps, coverage_report=coverage_summary)
-
-    def _has_tests(self) -> bool:
-        command = ["pytest", "--collect-only", "-q"]
-        try:
-            result = subprocess.run(command, capture_output=True, text=True, check=False)
-        except FileNotFoundError:
-            logging.warning("pytest is not available.")
-            return False
-        output = result.stdout + result.stderr
-        return "collected 0 items" not in output
 
     def _run_pytest_with_coverage(self) -> None:
         command = ["pytest", "--cov=src", "--cov-report=json"]

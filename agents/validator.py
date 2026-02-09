@@ -14,9 +14,6 @@ class ValidationResult:
 class ValidationAgent:
     def validate_tests(self) -> ValidationResult:
         logging.info("Running pytest validation")
-        if not self._has_tests():
-            logging.warning("No tests collected; skipping pytest run.")
-            return ValidationResult(success=True, output="No tests collected.")
         try:
             result = subprocess.run(
                 ["pytest"],
@@ -32,13 +29,3 @@ class ValidationAgent:
         if result.returncode != 0:
             logging.warning("pytest failed.")
         return ValidationResult(success=result.returncode == 0, output=output)
-
-    def _has_tests(self) -> bool:
-        command = ["pytest", "--collect-only", "-q"]
-        try:
-            result = subprocess.run(command, capture_output=True, text=True, check=False)
-        except FileNotFoundError:
-            logging.warning("pytest is not available.")
-            return False
-        output = result.stdout + result.stderr
-        return "collected 0 items" not in output

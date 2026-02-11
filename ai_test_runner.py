@@ -7,7 +7,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
-import yaml
+try:
+    import yaml
+except ModuleNotFoundError:  # pragma: no cover
+    yaml = None
 
 from agents.change_detector import ChangeDetectionAgent
 from agents.coverage_analyzer import CoverageAnalyzerAgent
@@ -25,6 +28,10 @@ class RunnerConfig:
 
 def load_config(config_path: Path) -> RunnerConfig:
     if not config_path.exists():
+        return RunnerConfig()
+
+    if yaml is None:
+        logging.warning("PyYAML is not installed; using default configuration.")
         return RunnerConfig()
 
     data = yaml.safe_load(config_path.read_text()) or {}

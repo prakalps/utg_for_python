@@ -38,6 +38,9 @@ class ChangeDetectionAgent:
             for path in changed_files
             if path.startswith("src/") and path.endswith(".py")
         ]
+        if not src_files:
+            logging.info("No changed src/*.py files detected; scanning src/ for python files.")
+            src_files = list(Path("src").rglob("*.py"))
         filtered_files = [
             path for path in src_files if not self._is_excluded(path)
         ]

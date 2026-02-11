@@ -4,6 +4,7 @@ import ast
 import json
 import logging
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Sequence
@@ -27,6 +28,12 @@ class CoverageAnalyzerAgent:
     def __init__(self, coverage_threshold: float = 0.8) -> None:
         self.coverage_threshold = coverage_threshold
 
+    def _python_executable(self) -> str:
+        venv_python = Path(".venv") / "Scripts" / "python.exe"
+        if venv_python.exists():
+            return str(venv_python)
+        return sys.executable
+
     def analyze_coverage(self, change_result: ChangeDetectionResult) -> CoverageAnalysisResult:
         logging.info("Running coverage analysis")
         coverage_json = Path("coverage.json")
@@ -44,8 +51,7 @@ class CoverageAnalyzerAgent:
         }
         gaps = []
         for change in change_result.changes:
-            file_key = str(change.file_path)
-            file_data = files_report.get(file_key, {})
+            file_data = self._lookup_file_data(files_report, change.file_path)
             missing_lines = set(file_data.get("missing_lines", []))
             missing_defs = self._map_missing_lines_to_defs(change.file_path, missing_lines)
             if missing_defs:
@@ -54,13 +60,38 @@ class CoverageAnalyzerAgent:
         return CoverageAnalysisResult(gaps=gaps, coverage_report=coverage_summary)
 
     def _run_pytest_with_coverage(self) -> None:
-        command = ["pytest", "--cov=src", "--cov-report=json"]
+        command = [
+            self._python_executable(),
+            "-m",
+            "pytest",
+            "--cov=src",
+            "--cov-report=json",
+        ]
         try:
             result = subprocess.run(command, capture_output=True, text=True, check=False)
             if result.returncode != 0:
-                logging.warning("pytest failed: %s", result.stderr.strip())
+                combined = f"{result.stdout}\n{result.stderr}".strip()
+                logging.warning("pytest failed: %s", combined)
         except FileNotFoundError:
-            logging.warning("pytest is not available.")
+            logging.warning("Python executable not available: %s", command[0])
+
+    def _lookup_file_data(self, files_report: Dict[str, object], file_path: Path) -> Dict[str, object]:
+        candidates = [
+            str(file_path),
+            file_path.as_posix(),
+        ]
+        normalized = []
+        for candidate in candidates:
+            if candidate:
+                normalized.append(candidate)
+                normalized.append(candidate.replace("/", "\\"))
+                normalized.append(candidate.replace("\\", "/"))
+
+        for key in normalized:
+            file_data = files_report.get(key)
+            if isinstance(file_data, dict):
+                return file_data
+        return {}
 
     def _map_missing_lines_to_defs(self, file_path: Path, missing_lines: set[int]) -> Sequence[str]:
         if not file_path.exists():

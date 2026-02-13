@@ -1,3 +1,8 @@
 coverage_threshold: 0.8
 excluded_folders: []
 dry_run: false
+openai_enabled: true
+openai_model: gpt-4o-mini
+max_regen_rounds: 5
+min_quality: high
+overwrite_generated_files: false

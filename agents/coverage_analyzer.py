@@ -22,6 +22,7 @@ class CoverageGap:
 class CoverageAnalysisResult:
     gaps: Sequence[CoverageGap]
     coverage_report: Dict[str, float]
+    coverage_text: str
 
 
 class CoverageAnalyzerAgent:
@@ -37,11 +38,11 @@ class CoverageAnalyzerAgent:
     def analyze_coverage(self, change_result: ChangeDetectionResult) -> CoverageAnalysisResult:
         logging.info("Running coverage analysis")
         coverage_json = Path("coverage.json")
-        self._run_pytest_with_coverage()
+        coverage_text = self._run_pytest_with_coverage()
 
         if not coverage_json.exists():
             logging.warning("Coverage report not found.")
-            return CoverageAnalysisResult(gaps=[], coverage_report={})
+            return CoverageAnalysisResult(gaps=[], coverage_report={}, coverage_text=coverage_text)
 
         report = json.loads(coverage_json.read_text())
         files_report = report.get("files", {})
@@ -57,23 +58,26 @@ class CoverageAnalyzerAgent:
             if missing_defs:
                 logging.info("Coverage gaps in %s: %s", change.file_path, missing_defs)
                 gaps.append(CoverageGap(file=change.file_path, missing_tests=missing_defs))
-        return CoverageAnalysisResult(gaps=gaps, coverage_report=coverage_summary)
+        return CoverageAnalysisResult(gaps=gaps, coverage_report=coverage_summary, coverage_text=coverage_text)
 
-    def _run_pytest_with_coverage(self) -> None:
+    def _run_pytest_with_coverage(self) -> str:
         command = [
             self._python_executable(),
             "-m",
             "pytest",
             "--cov=src",
             "--cov-report=json",
+            "--cov-report=term-missing",
         ]
         try:
             result = subprocess.run(command, capture_output=True, text=True, check=False)
             if result.returncode != 0:
                 combined = f"{result.stdout}\n{result.stderr}".strip()
                 logging.warning("pytest failed: %s", combined)
+            return result.stdout.strip()
         except FileNotFoundError:
             logging.warning("Python executable not available: %s", command[0])
+            return ""
 
     def _lookup_file_data(self, files_report: Dict[str, object], file_path: Path) -> Dict[str, object]:
         candidates = [
@@ -102,7 +106,7 @@ class CoverageAnalyzerAgent:
             return []
 
         missing_defs = []
-        for node in ast.walk(tree):
+        for node in getattr(tree, "body", []):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 start = node.lineno
                 end = getattr(node, "end_lineno", start)

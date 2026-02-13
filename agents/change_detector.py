@@ -32,7 +32,17 @@ class ChangeDetectionAgent:
             "diff",
             "--name-only",
         ]
-        changed_files = self._run_git_command(diff_command)
+        changed_files = list(self._run_git_command(diff_command))
+        untracked_files = list(
+            self._run_git_command([
+                "git",
+                "ls-files",
+                "--others",
+                "--exclude-standard",
+                "src",
+            ])
+        )
+        changed_files.extend(untracked_files)
         src_files = [
             Path(path)
             for path in changed_files

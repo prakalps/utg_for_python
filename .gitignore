@@ -1,0 +1,11 @@
+# Python
+__pycache__/
+*.pyc
+
+# Coverage / pytest
+.coverage
+coverage.json
+.pytest_cache/
+
+# OS
+.DS_Store

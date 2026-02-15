@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Sequence
@@ -27,7 +28,35 @@ class TestDiscoveryAgent:
         return TestDiscoveryResult(tests_by_source=tests_by_source, test_files=test_files)
 
     def _map_source_file(self, test_file: Path) -> Path:
-        module_name = test_file.stem.replace("test_", "")
+        import_path = ""
+        try:
+            content = test_file.read_text(encoding="utf-8")
+        except OSError:
+            content = ""
+
+        match = re.search(r"^\s*import\s+([\w\.]+)\s+as\s+module_under_test\s*$", content, re.M)
+        if match:
+            import_path = match.group(1).strip()
+        else:
+            match = re.search(r"^\s*import\s+([\w\.]+)\s*$", content, re.M)
+            if match:
+                import_path = match.group(1).strip()
+
+        if import_path:
+            parts = [p for p in import_path.split(".") if p]
+            return Path("src") / Path(*parts).with_suffix(".py")
+
+        module_name = test_file.stem
+        if module_name.startswith("test_"):
+            module_name = module_name[len("test_") :]
+        if module_name.endswith("_generated"):
+            module_name = module_name[: -len("_generated")]
+
+        if "__" in module_name:
+            parts = [p for p in module_name.split("__") if p]
+            if parts:
+                return Path("src") / Path(*parts).with_suffix(".py")
+
         return Path("src") / f"{module_name}.py"
 
     def _parse_tests(self, test_file: Path) -> Sequence[str]:

@@ -4,7 +4,9 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import shutil
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
@@ -140,20 +142,57 @@ def main() -> None:
 
     max_rounds = max(1, int(config.max_regen_rounds))
     min_q_rank = _quality_rank(config.min_quality)
+    quality_extension_budget = 5
+    extension_used = 0
 
     last_generation = None
     last_validation = None
     last_coverage = None
     iteration_feedback = ""
-    for round_idx in range(1, max_rounds + 1):
+
+    @dataclass(frozen=True)
+    class _RoundScore:
+        tests_pass: bool
+        gaps: int
+        worst_quality_rank: int
+
+    def _score_round(*, tests_pass: bool, gaps: int, worst_quality_rank: int) -> _RoundScore:
+        return _RoundScore(tests_pass=tests_pass, gaps=gaps, worst_quality_rank=worst_quality_rank)
+
+    def _is_better(a: _RoundScore, b: _RoundScore) -> bool:
+        if a.tests_pass != b.tests_pass:
+            return a.tests_pass and not b.tests_pass
+        if a.gaps != b.gaps:
+            return a.gaps < b.gaps
+        return a.worst_quality_rank > b.worst_quality_rank
+
+    def _snapshot_tests(*, tests_dir: Path) -> Path:
+        tmp_root = Path(tempfile.mkdtemp(prefix="utg_tests_snapshot_"))
+        snap_dir = tmp_root / "tests"
+        shutil.copytree(tests_dir, snap_dir)
+        return snap_dir
+
+    def _restore_tests(*, snapshot_dir: Path, tests_dir: Path) -> None:
+        if tests_dir.exists():
+            shutil.rmtree(tests_dir)
+        shutil.copytree(snapshot_dir, tests_dir)
+
+    tests_dir = Path("tests")
+    best_snapshot: Path | None = _snapshot_tests(tests_dir=tests_dir) if tests_dir.exists() else None
+    best_score = _score_round(tests_pass=False, gaps=10**9, worst_quality_rank=-1)
+
+    round_idx = 1
+    while round_idx <= max_rounds:
         logging.info("Regeneration round %s/%s", round_idx, max_rounds)
 
-        coverage_result = coverage_analyzer.analyze_coverage(change_result)
-        if coverage_result.coverage_text.strip():
-            print(coverage_result.coverage_text)
+        round_snapshot = _snapshot_tests(tests_dir=tests_dir) if tests_dir.exists() else None
+
+        coverage_before = coverage_analyzer.analyze_coverage(change_result)
+        if coverage_before.coverage_text.strip():
+            print(coverage_before.coverage_text)
 
         gaps_summary_lines: list[str] = []
-        for gap in coverage_result.gaps:
+        for gap in coverage_before.gaps:
             missing_lines = _missing_lines_for_file(gap.file)
             tail_lines = missing_lines[:50]
             gaps_summary_lines.append(
@@ -163,13 +202,18 @@ def main() -> None:
         generation_result = test_generator.generate_tests(
             change_result=change_result,
             discovery_result=discovery_result,
-            coverage_result=coverage_result,
+            coverage_result=coverage_before,
             overwrite_generated_files=config.overwrite_generated_files,
             iteration_feedback=iteration_feedback,
             min_quality=config.min_quality,
         )
 
         validation_result = validator.validate_tests()
+
+        coverage_after = coverage_analyzer.analyze_coverage(change_result)
+        if coverage_after.coverage_text.strip():
+            print(coverage_after.coverage_text)
+
         overall_quality = summarize_generated_quality(Path("tests"))
         worst_quality_rank = 2
         if overall_quality.get("low", 0) > 0:
@@ -177,9 +221,7 @@ def main() -> None:
         elif overall_quality.get("medium", 0) > 0:
             worst_quality_rank = 1
 
-        worst_quality_label = (
-            "low" if worst_quality_rank == 0 else "medium" if worst_quality_rank == 1 else "high"
-        )
+        worst_quality_label = "low" if worst_quality_rank == 0 else "medium" if worst_quality_rank == 1 else "high"
         pytest_excerpt = ""
         if not validation_result.success and validation_result.output:
             lines = [line for line in validation_result.output.splitlines() if line.strip()]
@@ -189,7 +231,7 @@ def main() -> None:
             [
                 f"Round {round_idx}/{max_rounds}",
                 f"tests_pass={validation_result.success}",
-                f"coverage_gaps={len(coverage_result.gaps)}",
+                f"coverage_gaps={len(coverage_after.gaps)}",
                 f"generated_this_round={generation_result.created_tests}",
                 f"quality_counts={overall_quality}",
                 f"worst_quality={worst_quality_label}",
@@ -200,34 +242,64 @@ def main() -> None:
             ]
         )
 
-        done = (
-            validation_result.success
-            and len(coverage_result.gaps) == 0
-            and worst_quality_rank >= min_q_rank
+        done = validation_result.success and len(coverage_after.gaps) == 0 and worst_quality_rank >= min_q_rank
+
+        round_score = _score_round(
+            tests_pass=validation_result.success,
+            gaps=len(coverage_after.gaps),
+            worst_quality_rank=worst_quality_rank,
         )
+        if _is_better(round_score, best_score):
+            best_score = round_score
+            if best_snapshot is not None:
+                shutil.rmtree(best_snapshot.parent, ignore_errors=True)
+            best_snapshot = _snapshot_tests(tests_dir=tests_dir)
+        elif round_snapshot is not None and best_snapshot is not None and not _is_better(round_score, best_score):
+            _restore_tests(snapshot_dir=best_snapshot, tests_dir=tests_dir)
 
         last_generation = generation_result
         last_validation = validation_result
-        last_coverage = coverage_result
+        last_coverage = coverage_after
 
         if done:
             logging.info(
                 "Stop condition met: tests_pass=%s gaps=%s worst_quality=%s min_quality=%s",
                 validation_result.success,
-                len(coverage_result.gaps),
-                ("low" if worst_quality_rank == 0 else "medium" if worst_quality_rank == 1 else "high"),
+                len(coverage_after.gaps),
+                worst_quality_label,
                 config.min_quality,
             )
             break
 
-        if round_idx == max_rounds:
+        if (
+            round_idx == max_rounds
+            and validation_result.success
+            and len(coverage_after.gaps) == 0
+            and worst_quality_rank < min_q_rank
+            and extension_used < quality_extension_budget
+        ):
+            extension_used += 1
+            max_rounds += 1
+            logging.info(
+                "Extending regeneration rounds to improve quality (extension %s/%s): worst_quality=%s min_quality=%s",
+                extension_used,
+                quality_extension_budget,
+                worst_quality_label,
+                config.min_quality,
+            )
+        elif round_idx == max_rounds:
             logging.info(
                 "Max rounds reached: tests_pass=%s gaps=%s worst_quality=%s min_quality=%s",
                 validation_result.success,
-                len(coverage_result.gaps),
-                ("low" if worst_quality_rank == 0 else "medium" if worst_quality_rank == 1 else "high"),
+                len(coverage_after.gaps),
+                worst_quality_label,
                 config.min_quality,
             )
+
+        round_idx += 1
+
+    if best_snapshot is not None:
+        _restore_tests(snapshot_dir=best_snapshot, tests_dir=tests_dir)
 
     generation_result = last_generation
     validation_result = last_validation

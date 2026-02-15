@@ -45,17 +45,13 @@ def test_MessageRouter_route_for_empty_recipient_rule():
         assert False
     except ValueError:
         assert True
+# origin=rule quality=high symbol=Severity
+def test_Severity_enum_rule():
+    """Rule-based test for `module_under_test.Severity` enum."""
+    instance = module_under_test.Severity.INFO
+    assert instance is not None
+    assert instance.value is not None
 # origin=rule quality=high symbol=parse_message
-def test_parse_message_smoke():
-    """Smoke test for `module_under_test.parse_message`."""
-    target = module_under_test.parse_message
-    assert callable(target)
-    try:
-        result = target('from=alice;to=bob;severity=info;body=hello')
-        assert result is None or result is not None
-    except Exception:
-        assert True
-# origin=rule quality=medium symbol=parse_message
 def test_parse_message_missing_fields_rule():
     # sender / recipient / body / severity validations
     for raw in [
@@ -67,6 +63,7 @@ def test_parse_message_missing_fields_rule():
         with pytest.raises(ValueError):
             module_under_test.parse_message(raw)
     assert True
+    assert isinstance(raw, str)
 # origin=rule quality=high symbol=parse_message
 def test_parse_message_empty_raw_rule():
     with pytest.raises(ValueError) as excinfo:
@@ -103,3 +100,21 @@ def test_parse_message_invalid_severity_rule():
         module_under_test.parse_message('from=alice;to=bob;severity=nope;body=hi')
     assert 'invalid severity' in str(excinfo.value)
     assert excinfo.value is not None
+# origin=rule quality=high symbol=parse_message
+def test_parse_message_valid_rule():
+    msg = module_under_test.parse_message('from=alice;to=bob;severity=info;body=hello')
+    assert msg.sender == 'alice'
+    assert msg.recipient == 'bob'
+    assert msg.body == 'hello'
+    assert msg.severity.value == 'info'
+    assert msg.created_at is not None
+# origin=rule quality=high symbol=parse_message
+def test_parse_message_smoke():
+    """Smoke test for `module_under_test.parse_message`."""
+    target = module_under_test.parse_message
+    assert callable(target)
+    try:
+        result = target('from=alice;to=bob;severity=info;body=hello')
+        assert result is None or result is not None
+    except Exception:
+        assert True

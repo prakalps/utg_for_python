@@ -44,3 +44,14 @@ def test_InMemoryTicketStore_add_comment_ticket_not_found_rule():
         store.add_comment(comment)
     assert 'not found' in str(excinfo.value)
     assert excinfo.value is not None
+# origin=rule quality=high symbol=InMemoryTicketStore
+def test_InMemoryTicketStore_list_comments_rule():
+    import helpdesk.models
+    store = module_under_test.InMemoryTicketStore()
+    t = helpdesk.models.Ticket(id='HD-400003', requester='u@e.com', title='x', description='y')
+    store.add_ticket(t)
+    comment = helpdesk.models.Comment(ticket_id=t.id, author='u@e.com', body='hi')
+    store.add_comment(comment)
+    comments = list(store.list_comments(t.id))
+    assert len(comments) == 1
+    assert comments[0].body == 'hi'

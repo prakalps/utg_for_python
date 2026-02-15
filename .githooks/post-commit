@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-python ai_test_runner.py --git-hook
+python automatic_unit_test_generator.py --git-hook
